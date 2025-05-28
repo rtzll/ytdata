@@ -94,16 +94,7 @@ func main() {
 		Short: "Fetch liked videos",
 		Long:  "Fetch all liked videos and export to JSONL format",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureSetup(&config); err != nil {
-				cmd.SilenceUsage = true
-				return err
-			}
-			output, err := cmd.Flags().GetString("output")
-			if err != nil {
-				return fmt.Errorf("failed to get output flag: %w", err)
-			}
-			config.OutputFile = output
-			return fetchLikedVideos(config)
+			return createCommandHandler(cmd, &config, fetchLikedVideos)
 		},
 	}
 
@@ -112,16 +103,7 @@ func main() {
 		Short: "Fetch subscriptions",
 		Long:  "Fetch all subscriptions and export to JSONL format",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureSetup(&config); err != nil {
-				cmd.SilenceUsage = true
-				return err
-			}
-			output, err := cmd.Flags().GetString("output")
-			if err != nil {
-				return fmt.Errorf("failed to get output flag: %w", err)
-			}
-			config.OutputFile = output
-			return fetchSubscriptions(config)
+			return createCommandHandler(cmd, &config, fetchSubscriptions)
 		},
 	}
 
@@ -130,22 +112,14 @@ func main() {
 		Short: "Fetch playlists",
 		Long:  "Fetch all user created playlists and export to JSONL format",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureSetup(&config); err != nil {
-				cmd.SilenceUsage = true
-				return err
-			}
-			output, err := cmd.Flags().GetString("output")
-			if err != nil {
-				return fmt.Errorf("failed to get output flag: %w", err)
-			}
-			config.OutputFile = output
-			return fetchPlaylists(config)
+			return createCommandHandler(cmd, &config, fetchPlaylists)
 		},
 	}
 
-	likedCmd.Flags().String("output", "liked_videos.jsonl", "Output file for liked videos")
-	subscriptionsCmd.Flags().String("output", "subscriptions.jsonl", "Output file for subscriptions")
-	playlistsCmd.Flags().String("output", "playlists.jsonl", "Output file for playlists")
+	// Add output flag with short option to each command
+	addOutputFlag(likedCmd, "liked_videos.jsonl", "Output file for liked videos")
+	addOutputFlag(subscriptionsCmd, "subscriptions.jsonl", "Output file for subscriptions")
+	addOutputFlag(playlistsCmd, "playlists.jsonl", "Output file for playlists")
 
 	rootCmd.AddCommand(setupCmd, likedCmd, subscriptionsCmd, playlistsCmd)
 
@@ -644,6 +618,33 @@ func fetchSubscriptions(config Config) error {
 	}
 
 	return nil
+}
+
+// Helper function to add output flag with short option to commands
+func addOutputFlag(cmd *cobra.Command, defaultValue, description string) {
+	cmd.Flags().StringP("output", "o", defaultValue, description)
+}
+
+// Helper function to get output flag value and set it in config
+func getOutputFlag(cmd *cobra.Command, config *Config) error {
+	output, err := cmd.Flags().GetString("output")
+	if err != nil {
+		return fmt.Errorf("failed to get output flag: %w", err)
+	}
+	config.OutputFile = output
+	return nil
+}
+
+// Common command handler that handles setup and flag parsing
+func createCommandHandler(cmd *cobra.Command, config *Config, fetchFunc func(Config) error) error {
+	if err := ensureSetup(config); err != nil {
+		cmd.SilenceUsage = true
+		return err
+	}
+	if err := getOutputFlag(cmd, config); err != nil {
+		return err
+	}
+	return fetchFunc(*config)
 }
 
 func fetchPlaylists(config Config) error {
