@@ -149,20 +149,23 @@ func authenticateYouTube(config Config) (*youtube.Service, error) {
 
 	// If we have any token (even expired), let OAuth2 client handle refresh
 	if token != nil {
-		// Create client with auto-refresh capability
-		client := oauthConfig.Client(ctx, token)
+		// Create token source that will handle refresh automatically
+		tokenSource := oauthConfig.TokenSource(ctx, token)
 
-		// Test if the client works (will auto-refresh if needed)
-		service, err := youtube.NewService(ctx, option.WithHTTPClient(client))
+		// Get a fresh token (will refresh if needed)
+		freshToken, err := tokenSource.Token()
 		if err == nil {
 			// Save the potentially refreshed token
-			tokenSource := oauthConfig.TokenSource(ctx, token)
-			if refreshedToken, err := tokenSource.Token(); err == nil {
-				if err := saveCredentials(config.Credentials, refreshedToken); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: Failed to save refreshed credentials: %v\n", err)
-				}
+			if err := saveCredentials(config.Credentials, freshToken); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to save refreshed credentials: %v\n", err)
 			}
-			return service, nil
+
+			// Create client with the fresh token
+			client := oauthConfig.Client(ctx, freshToken)
+			service, err := youtube.NewService(ctx, option.WithHTTPClient(client))
+			if err == nil {
+				return service, nil
+			}
 		}
 	}
 
