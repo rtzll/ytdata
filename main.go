@@ -239,7 +239,7 @@ func performOAuthFlow(config *oauth2.Config) (*oauth2.Token, error) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 	fmt.Println("Opening browser for authorization...")
 
 	if err := openBrowser(authURL); err != nil {
