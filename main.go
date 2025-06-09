@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	version             = "0.1.0"
+	version             = "0.2.0"
 	credentialsFile     = "youtube_credentials.json"
 	clientSecretsPrefix = "client_secret_"
 	clientSecretsSuffix = ".apps.googleusercontent.com.json"
@@ -71,59 +72,91 @@ func main() {
 	var config Config
 
 	rootCmd := &cobra.Command{
-		Use:     "ytdata",
-		Short:   "YouTube data export tool",
-		Long:    "A CLI tool to export YouTube data including liked videos, subscriptions, and playlists",
-		Version: version,
+		Use:           "ytdata",
+		Short:         "YouTube data export tool",
+		Long:          "A CLI tool to export YouTube data including liked videos, subscriptions, and playlists",
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
-	rootCmd.PersistentFlags().StringVar(&config.ClientSecret, "client-secret", "", "Path to client secrets JSON file (auto-detected if not specified)")
-	rootCmd.PersistentFlags().StringVar(&config.Credentials, "credentials", getDefaultCredentialsPath(), "Path to credentials JSON file")
+	rootCmd.PersistentFlags().StringVarP(&config.ClientSecret, "client-secret", "s", "", "Path to client secrets JSON file (auto-detected if not specified)")
+	rootCmd.PersistentFlags().StringVarP(&config.Credentials, "credentials", "c", getDefaultCredentialsPath(), "Path to credentials JSON file")
+
+	cobra.OnInitialize(func() {
+		if config.ClientSecret == "" {
+			if v := os.Getenv("YTDATA_CLIENT_SECRET"); v != "" {
+				config.ClientSecret = v
+			}
+		}
+		if v := os.Getenv("YTDATA_CREDENTIALS"); v != "" {
+			config.Credentials = v
+		}
+	})
+
+	rootCmd.PersistentFlags().BoolP("version", "v", false, "Show version")
+	cobra.CheckErr(rootCmd.RegisterFlagCompletionFunc("version", nil))
 
 	setupCmd := &cobra.Command{
-		Use:   "setup",
-		Short: "Interactive setup for YouTube API credentials",
-		Long:  "Guide you through setting up Google Cloud project and OAuth2 credentials",
+		Use:     "init",
+		Aliases: []string{"setup"},
+		Short:   "Interactive setup for YouTube API credentials",
+		Long:    "Guide you through setting up Google Cloud project and OAuth2 credentials",
+		Args:    cobra.NoArgs,
+		Example: "  ytdata init",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSetup()
 		},
 	}
 
 	likedCmd := &cobra.Command{
-		Use:   "liked",
-		Short: "Fetch liked videos",
-		Long:  "Fetch all liked videos and export to JSONL format",
+		Use:          "liked",
+		Short:        "Fetch liked videos",
+		Long:         "Fetch all liked videos and export to JSONL format",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		Example: `  ytdata liked
+  ytdata liked -o liked.jsonl
+  ytdata liked | jq .`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return createCommandHandler(cmd, &config, fetchLikedVideos)
 		},
 	}
 
 	subscriptionsCmd := &cobra.Command{
-		Use:   "subscriptions",
-		Short: "Fetch subscriptions",
-		Long:  "Fetch all subscriptions and export to JSONL format",
+		Use:          "subscriptions",
+		Short:        "Fetch subscriptions",
+		Long:         "Fetch all subscriptions and export to JSONL format",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		Example: `  ytdata subscriptions
+  ytdata subscriptions -o subscriptions.jsonl`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return createCommandHandler(cmd, &config, fetchSubscriptions)
 		},
 	}
 
 	playlistsCmd := &cobra.Command{
-		Use:   "playlists",
-		Short: "Fetch playlists",
-		Long:  "Fetch all user created playlists and export to JSONL format",
+		Use:          "playlists",
+		Short:        "Fetch playlists",
+		Long:         "Fetch all user created playlists and export to JSONL format",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		Example: `  ytdata playlists
+  ytdata playlists -o playlists.jsonl`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return createCommandHandler(cmd, &config, fetchPlaylists)
 		},
 	}
 
-	// Add output flag with short option to each command
-	addOutputFlag(likedCmd, "liked_videos.jsonl", "Output file for liked videos")
-	addOutputFlag(subscriptionsCmd, "subscriptions.jsonl", "Output file for subscriptions")
-	addOutputFlag(playlistsCmd, "playlists.jsonl", "Output file for playlists")
+	addOutputFlag(likedCmd, "", "Write liked videos to stdout (or file with -o)")
+	addOutputFlag(subscriptionsCmd, "", "Write subscriptions to stdout (or file with -o)")
+	addOutputFlag(playlistsCmd, "", "Write playlists to stdout (or file with -o)")
 
 	rootCmd.AddCommand(setupCmd, likedCmd, subscriptionsCmd, playlistsCmd)
 
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -207,7 +240,8 @@ func performOAuthFlow(config *oauth2.Config) (*oauth2.Token, error) {
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
-	server := &http.Server{Addr: ":8080"}
+	// Start local server on port 8080 for OAuth callback
+	config.RedirectURL = "http://localhost:8080/"
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
@@ -224,7 +258,7 @@ func performOAuthFlow(config *oauth2.Config) (*oauth2.Token, error) {
 <meta charset="utf-8">
 </head>
 <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-<h2>✅ Authorization Complete</h2>
+<h2>Authorization Complete</h2>
 <p>You can close this window and return to the terminal.</p>
 </body>
 </html>`); err != nil {
@@ -234,16 +268,17 @@ func performOAuthFlow(config *oauth2.Config) (*oauth2.Token, error) {
 		codeChan <- code
 	})
 
+	server := &http.Server{Addr: ":8080"}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- fmt.Errorf("failed to start OAuth callback server: %w", err)
+			errChan <- fmt.Errorf("failed to serve OAuth callback: %w", err)
 		}
 	}()
 
 	time.Sleep(100 * time.Millisecond)
 
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.ApprovalForce)
-	fmt.Println("Opening browser for authorization...")
+	fmt.Println("Opening authorization URL in browser...")
 
 	if err := openBrowser(authURL); err != nil {
 		fmt.Printf("Go to: %s\n", authURL)
@@ -303,22 +338,22 @@ func ensureSetup(config *Config) error {
 	if config.ClientSecret == "" {
 		detected, err := findClientSecretsFile()
 		if err != nil {
-			fmt.Println("❌ No client secrets file found")
-			fmt.Println("Run 'ytdata setup' for guided setup instructions")
+			fmt.Fprintln(os.Stderr, "error: no client secrets file found")
+			fmt.Fprintln(os.Stderr, "Run 'ytdata init' for guided setup instructions")
 			return fmt.Errorf("setup required: %w", err)
 		}
 		config.ClientSecret = detected
 	}
 
 	if _, err := os.Stat(config.ClientSecret); os.IsNotExist(err) {
-		fmt.Printf("❌ Client secrets file not found at: %s\n", config.ClientSecret)
-		fmt.Println("Run 'ytdata setup' for guided setup instructions")
+		fmt.Fprintf(os.Stderr, "error: client secrets file not found at: %s\n", config.ClientSecret)
+		fmt.Fprintln(os.Stderr, "Run 'ytdata init' for guided setup instructions")
 		return fmt.Errorf("setup required: client secrets file not found")
 	}
 
 	if err := validateClientSecretsFile(config.ClientSecret); err != nil {
-		fmt.Printf("❌ Invalid client secrets file: %v\n", err)
-		fmt.Println("Run 'ytdata setup' for guided setup instructions")
+		fmt.Fprintf(os.Stderr, "error: invalid client secrets file: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Run 'ytdata init' for guided setup instructions")
 		return fmt.Errorf("setup required: %w", err)
 	}
 
@@ -375,16 +410,14 @@ func promptUser(message string) string {
 }
 
 func runSetup() error {
-	fmt.Println("🚀 YouTube Data CLI Setup")
-	fmt.Println("===========================")
+	fmt.Println("YouTube Data CLI — setup")
 	fmt.Println()
 
 	fmt.Println("This tool requires Google Cloud Project setup and OAuth2 credentials.")
 	fmt.Println("I'll guide you through the process step by step.")
 	fmt.Println()
 
-	fmt.Println("📝 Step 1: Google Cloud Project Setup")
-	fmt.Println("--------------------------------------")
+	fmt.Println("Step 1: Google Cloud Project Setup")
 	fmt.Println("You need a Google Cloud Project with YouTube Data API v3 enabled.")
 	fmt.Println()
 
@@ -402,8 +435,7 @@ func runSetup() error {
 	}
 
 	fmt.Println()
-	fmt.Println("📡 Step 2: Enable YouTube Data API v3")
-	fmt.Println("-------------------------------------")
+	fmt.Println("Step 2: Enable YouTube Data API v3")
 	fmt.Println("1. In your Google Cloud Project, go to 'APIs & Services' > 'Library'")
 	fmt.Println("2. Search for 'YouTube Data API v3'")
 	fmt.Println("3. Click on it and click 'Enable'")
@@ -413,8 +445,7 @@ func runSetup() error {
 	promptUser("Press Enter when you've enabled the API... ")
 
 	fmt.Println()
-	fmt.Println("🔐 Step 3: Create OAuth2 Credentials")
-	fmt.Println("------------------------------------")
+	fmt.Println("Step 3: Create OAuth2 Credentials")
 	fmt.Println("1. Go to 'APIs & Services' > 'Credentials'")
 	fmt.Println("2. Click 'Create Credentials' > 'OAuth client ID'")
 	fmt.Println("3. If prompted, configure the OAuth consent screen first:")
@@ -431,40 +462,37 @@ func runSetup() error {
 
 	fmt.Println("Credentials URL: https://console.cloud.google.com/apis/credentials")
 	fmt.Println()
-	fmt.Println("📁 Step 4: Place the Credentials File")
-	fmt.Println("------------------------------------")
+	fmt.Println("Step 4: Place the Credentials File")
 	fmt.Println("1. Download the JSON file from step 3")
 	fmt.Printf("2. Place it in your config directory: %s\n", getConfigDir())
 	fmt.Println("   (or alternatively in the current directory)")
 	fmt.Println("3. The filename should look like:")
-	fmt.Printf("   client_secret_XXXXX.apps.googleusercontent.com.json\n")
+	fmt.Println("   client_secret_XXXXX.apps.googleusercontent.com.json")
 	fmt.Println()
 
 	promptUser("Press Enter when you've placed the file... ")
 
 	fmt.Println()
-	fmt.Println("🔍 Verifying Setup...")
-	fmt.Println("---------------------")
+	fmt.Println("Verifying setup...")
 
 	detected, err := findClientSecretsFile()
 	if err != nil {
-		fmt.Printf("❌ Error: %s\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		fmt.Println("Please ensure you've downloaded and placed the client secrets file correctly.")
 		return err
 	}
 
-	fmt.Printf("✅ Found client secrets file: %s\n", detected)
+	fmt.Printf("Found client secrets file: %s\n", detected)
 
 	if err := validateClientSecretsFile(detected); err != nil {
-		fmt.Printf("❌ Error: %s\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		fmt.Println("Please ensure you downloaded the correct OAuth2 client credentials.")
 		return err
 	}
 
-	fmt.Println("✅ Client secrets file is valid")
+	fmt.Println("Client secrets file is valid")
 	fmt.Println()
-	fmt.Println("🔐 Step 5: Test Authentication")
-	fmt.Println("------------------------------")
+	fmt.Println("Step 5: Test Authentication")
 	fmt.Println("Let's verify everything works by completing the OAuth flow...")
 	fmt.Println()
 
@@ -476,19 +504,18 @@ func runSetup() error {
 
 	_, err = authenticateYouTube(config)
 	if err != nil {
-		fmt.Printf("❌ Authentication test failed: %s\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		fmt.Println("Please check your OAuth2 configuration and try again.")
 		return err
 	}
 
-	fmt.Println("✅ Authentication successful!")
+	fmt.Println("Authentication successful")
 	fmt.Println()
-	fmt.Println("🎉 Setup Complete!")
-	fmt.Println("==================")
+	fmt.Println("Setup complete")
 	fmt.Println("You can now use the following commands:")
-	fmt.Println("  ytdata liked         # Fetch your liked videos")
-	fmt.Println("  ytdata subscriptions # Fetch subscription statistics")
-	fmt.Println("  ytdata playlists     # Fetch your playlists")
+	fmt.Println("  ytdata liked         # Fetch your liked videos (default: stdout)")
+	fmt.Println("  ytdata liked -o FILE # Fetch your liked videos (write to FILE)")
+	fmt.Println("  # similar for subscriptions and playlists")
 
 	return nil
 }
@@ -524,17 +551,22 @@ func fetchLikedVideos(config Config) error {
 		pageToken = response.NextPageToken
 	}
 
-	file, err := os.Create(config.OutputFile)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to close file: %v\n", err)
+	var writer io.Writer
+	if config.OutputFile == "" {
+		writer = os.Stdout
+	} else {
+		f, err := os.Create(config.OutputFile)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
 		}
-	}()
-
-	encoder := json.NewEncoder(file)
+		defer func() {
+			if err := f.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to close file: %v\n", err)
+			}
+		}()
+		writer = f
+	}
+	encoder := json.NewEncoder(writer)
 	for _, video := range allVideos {
 		if err := encoder.Encode(video); err != nil {
 			return fmt.Errorf("failed to write video data: %w", err)
@@ -603,17 +635,22 @@ func fetchSubscriptions(config Config) error {
 		allChannels = append(allChannels, response.Items...)
 	}
 
-	file, err := os.Create(config.OutputFile)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to close file: %v\n", err)
+	var writer io.Writer
+	if config.OutputFile == "" {
+		writer = os.Stdout
+	} else {
+		f, err := os.Create(config.OutputFile)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
 		}
-	}()
-
-	encoder := json.NewEncoder(file)
+		defer func() {
+			if err := f.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to close file: %v\n", err)
+			}
+		}()
+		writer = f
+	}
+	encoder := json.NewEncoder(writer)
 	for _, channel := range allChannels {
 		if err := encoder.Encode(channel); err != nil {
 			return fmt.Errorf("failed to write channel data: %w", err)
@@ -678,17 +715,22 @@ func fetchPlaylists(config Config) error {
 		pageToken = response.NextPageToken
 	}
 
-	file, err := os.Create(config.OutputFile)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to close file: %v\n", err)
+	var writer io.Writer
+	if config.OutputFile == "" {
+		writer = os.Stdout
+	} else {
+		f, err := os.Create(config.OutputFile)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
 		}
-	}()
-
-	encoder := json.NewEncoder(file)
+		defer func() {
+			if err := f.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to close file: %v\n", err)
+			}
+		}()
+		writer = f
+	}
+	encoder := json.NewEncoder(writer)
 	for _, playlist := range allPlaylists {
 		if err := encoder.Encode(playlist); err != nil {
 			return fmt.Errorf("failed to write playlist data: %w", err)

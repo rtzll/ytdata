@@ -5,7 +5,7 @@ Export your YouTube data including liked videos, subscriptions, and playlists to
 ## Quick Start
 
 1. **Build**: `go build -o ytdata`
-2. **Setup**: `./ytdata setup` (guided setup with OAuth)
+2. **Init**: `./ytdata init` (alias `setup`, guided setup with OAuth)
 3. **Use**: `./ytdata liked`, `./ytdata subscriptions`, or `./ytdata playlists`
 
 ## Features
@@ -18,27 +18,18 @@ Export your YouTube data including liked videos, subscriptions, and playlists to
 
 ## Commands
 
-```bash
-# Interactive setup (includes OAuth authentication)
-ytdata setup
-
-# Export data
-ytdata liked [--output liked.jsonl]
-ytdata subscriptions [--output subs.jsonl] 
-ytdata playlists [--output playlists.jsonl]
-
-# Global flags
---client-secret path/to/client_secret.json  # Auto-detected if not specified
---credentials path/to/creds.json            # Default: user config dir
-```
+Run `ytdata --help` or `ytdata <command> --help` to see available commands and examples.
 
 ## Setup Process
 
-Run `ytdata setup` for guided setup:
+Run `ytdata init` (alias: setup) for guided setup:
 
 1. **Google Cloud Project** - Create or use existing project
 2. **Enable YouTube Data API v3** - Direct link provided
-3. **OAuth2 Credentials** - Create web application credentials
+3. **OAuth2 Credentials** - Create web application credentials:
+   - Application type: Web application
+   - Name: 'ytdata' (or any name)
+   - Add http://localhost:8080/ to 'Authorized redirect URIs'
 4. **Download & Place** - Put JSON file in config directory
 5. **Authentication Test** - Complete OAuth flow automatically
 
@@ -62,7 +53,7 @@ All commands export to JSONL format (one JSON object per line):
 
 ## Troubleshooting
 
-- **Setup issues**: Re-run `ytdata setup`
+- **Setup issues**: Re-run `ytdata init`
 - **Auth failures**: Delete credentials file and re-authenticate
 - **API quota**: Wait for daily quota reset
 - **Missing data**: Some data is only available via [Google Takeout](https://takeout.google.com)
