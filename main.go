@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	version             = "0.2.0"
+	version             = "0.3.0"
 	credentialsFile     = "youtube_credentials.json"
 	clientSecretsPrefix = "client_secret_"
 	clientSecretsSuffix = ".apps.googleusercontent.com.json"
@@ -95,7 +95,11 @@ func main() {
 	})
 
 	rootCmd.PersistentFlags().BoolP("version", "v", false, "Show version")
-	cobra.CheckErr(rootCmd.RegisterFlagCompletionFunc("version", nil))
+
+	// Register completion functions for file flags
+	cobra.CheckErr(rootCmd.RegisterFlagCompletionFunc("client-secret", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"json"}, cobra.ShellCompDirectiveFilterFileExt
+	}))
 
 	setupCmd := &cobra.Command{
 		Use:     "init",
@@ -152,6 +156,14 @@ func main() {
 	addOutputFlag(likedCmd, "", "Write liked videos to stdout (or file with -o)")
 	addOutputFlag(subscriptionsCmd, "", "Write subscriptions to stdout (or file with -o)")
 	addOutputFlag(playlistsCmd, "", "Write playlists to stdout (or file with -o)")
+
+	// Register completion for output flags
+	outputCompletion := func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"jsonl"}, cobra.ShellCompDirectiveFilterFileExt
+	}
+	cobra.CheckErr(likedCmd.RegisterFlagCompletionFunc("output", outputCompletion))
+	cobra.CheckErr(subscriptionsCmd.RegisterFlagCompletionFunc("output", outputCompletion))
+	cobra.CheckErr(playlistsCmd.RegisterFlagCompletionFunc("output", outputCompletion))
 
 	rootCmd.AddCommand(setupCmd, likedCmd, subscriptionsCmd, playlistsCmd)
 

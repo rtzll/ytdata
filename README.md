@@ -51,6 +51,17 @@ All commands export to JSONL format (one JSON object per line):
 - **Subsequent uses**: Automatic authentication with saved credentials
 - **Token refresh**: Handles expired tokens automatically
 
+## Shell Completion
+
+ytdata supports shell completion for bash, zsh, fish, and PowerShell with context-aware file suggestions.
+
+```shell
+# Enable completion for your shell (bash, zsh, fish, powershell)
+source <(ytdata completion bash)
+```
+
+Tab completion automatically suggests `.json` files for `--client-secret` and `.jsonl` extensions for `--output`.
+
 ## Troubleshooting
 
 - **Setup issues**: Re-run `ytdata init`
